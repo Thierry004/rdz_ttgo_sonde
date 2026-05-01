@@ -14,11 +14,11 @@ jobs:
       - name: Install PlatformIO
         run: pip install platformio
 
-      - name: Build T-BEAM v1.2 (AXP2101)
-        run: platformio run -e tbeam-v1.2
+      - name: Build ttgo-lora32
+        run: platformio run -e ttgo-lora32
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: firmware-tbeam-v1.2
-          path: .pio/build/tbeam-v1.2/*.bin
+          name: firmware-ttgo-lora32
+          path: .pio/build/ttgo-lora32/*.bin
