@@ -7,6 +7,10 @@
  *  http://wirelessopensource.com
  *
  *  SPDX-License-Identifier:    LGPL-2.1+
+ *
+ * MODIFICATION: LNA gain forced to maximum (G1) + HF boost enabled (+3dB)
+ * for improved sensitivity on 400-406 MHz radiosonde band.
+ * REG_LNA = 0x23 : LnaGain=G1 (bits 7-5 = 001) + LnaBoostHf=11 (bits 1-0 = 11)
  */
 
 #include "SX1278FSK.h"
@@ -77,6 +81,15 @@ uint8_t SX1278FSK::ON()
 	}
 	// set FSK mode
 	state = setFSK();
+
+	// MODIFICATION: Force LNA gain to maximum (G1) + enable HF boost (+3dB)
+	// REG_LNA (0x0C):
+	//   bits 7-5 = 001 -> LnaGain = G1 (maximum sensitivity)
+	//   bits 1-0 = 11  -> LnaBoostHf = enabled (+3dB on HF band 400-500MHz)
+	// This replaces the default AGC-controlled gain which was leaving LNA at -999 dB
+	writeRegister(REG_LNA, 0x23);
+	Serial.printf("RX LNA Gain forced to G1 maximum + HF boost enabled (REG_LNA=0x23)\n");
+
 	return state;
 }
 
@@ -378,10 +391,15 @@ int SX1278FSK::getLNAGain() {
 	int gain = (readRegister(REG_LNA)>>5)&0x07;
 	return gaintab[gain];
 }
+
+// MODIFICATION: setLNAGain now also sets HF boost bits (bits 1-0)
+// to enable the +3dB boost on HF band (400-500 MHz)
 uint8_t SX1278FSK::setLNAGain(int gain) {
 	uint8_t g=1;
 	while(gain<gaintab[g] && g<6) {g++; }
-	writeRegister(REG_LNA, g<<5);
+	// Original: writeRegister(REG_LNA, g<<5);
+	// Modified: add LnaBoostHf=11 (0x03) for +3dB on HF band
+	writeRegister(REG_LNA, (g<<5) | 0x03);
 	return 0;
 }
 
@@ -539,18 +557,13 @@ Returns: RSSI value
 int16_t SX1278FSK::getRSSI()
 {
 	int16_t RSSI;
-	//int rssi_mean = 0;
 	int total = 1;
 
 	/// FSK mode
-	// get mean value of RSSI
 	for(int i = 0; i < total; i++)
 	{
 		RSSI = readRegister(REG_RSSI_VALUE_FSK);
-		//rssi_mean += _RSSI;
 	}
-	//rssi_mean = rssi_mean / total;	
-	//RSSI = rssi_mean;
 
 #if (SX1278FSK_debug_mode > 0)
 	Serial.print(F("## RSSI value is "));
@@ -568,7 +581,6 @@ int32_t SX1278FSK::getFEI()
 {
 	int32_t FEI;
 	int16_t regval = (readRegister(REG_FEI_MSB)<<8) | readRegister(REG_FEI_LSB);
-	//Serial.printf("feireg: %04x\n", regval);
 	FEI = (int32_t)(regval * SX127X_FSTEP);
 	return FEI;
 }
@@ -580,7 +592,6 @@ int32_t SX1278FSK::getAFC()
 {
 	int32_t AFC;
 	int16_t regval = (readRegister(REG_AFC_MSB)<<8) | readRegister(REG_AFC_LSB);
-	//Serial.printf("afcreg: %04x\n", regval);
 	AFC = (int32_t)(regval * SX127X_FSTEP);
 	return AFC;
 }
@@ -670,7 +681,6 @@ int8_t SX1278FSK::setMaxCurrent(uint8_t rate)
 		// Enable Over Current Protection
 		rate |= 0b00100000;
 
-		//state = 1;
 		st0 = readRegister(REG_OP_MODE);	// Save the previous status
 		writeRegister(REG_OP_MODE, FSK_STANDBY_MODE);	// Set FSK Standby mode to write in registers
 		writeRegister(REG_OCP, rate);		// Modifying maximum current supply
@@ -697,8 +707,6 @@ uint8_t SX1278FSK::receive()
 	Serial.println();
 	Serial.println(F("Starting 'receive'"));
 #endif
-	// TODO: Is there anything else to be done?
-	//
 	writeRegister(REG_OP_MODE, FSK_RX_MODE);  
 	state = 0;
 #if (SX1278FSK_debug_mode > 1)
@@ -744,25 +752,15 @@ uint8_t SX1278FSK::receivePacketTimeout(uint32_t wait, byte *data)
 		if( bitRead(value,2)==1 ) ready=1;
 		if( bitRead(value, 6) == 0 ) { // FIFO not empty
 			data[di++] = readRegister(REG_FIFO);
-			// It's a bit of a hack.... get RSSI and AFC (a) at beginning of packet and
-			// for RS41 after about 0.5 sec. It might be more logical to put this decoder-specific
-			// code into RS41.cpp instead of this file... (maybe TODO?)
 			if(di==1 || di==290 ) {
 				int rssi=getRSSI();
 				int afc=getAFC();
-#if 0
-				Serial.printf("Test(%d): RSSI=%d", rxtask.currentSonde, rssi/2);
-				Serial.print("Test: AFC="); Serial.println(afc);
-#endif
 				sonde.sondeList[rxtask.currentSonde].rssi = rssi;
 				sonde.sondeList[rxtask.currentSonde].afc = afc;
 				if(rxtask.receiveResult==0xFFFF)
 					rxtask.receiveResult = RX_UPDATERSSI;
-				//sonde.si()->rssi = rssi;
-				//sonde.si()->afc = afc;
 			}
 			if(di>520) {
-				// TODO
 				Serial.println("TOO MUCH DATA");
 				break;
 			}
@@ -798,93 +796,6 @@ uint8_t SX1278FSK::receivePacketTimeout(uint32_t wait, byte *data)
 
 	return state;
 }
-
-
-#if 0
-/*
-Function: It gets the temperature from the measurement block module.
-Returns: Integer that determines if there has been any error
-state = 2  --> The command has not been executed
-state = 1  --> There has been an error while executing the command
-state = 0  --> The command has been executed with no errors
-*/
-uint8_t SX1278FSK::getTemp()
-{
-	byte st0;
-	uint8_t state = 2;
-
-#if (SX1278FSK_debug_mode > 1)
-	Serial.println();
-	Serial.println(F("Starting 'getTemp'"));
-#endif
-
-	st0 = readRegister(REG_OP_MODE);	// Save the previous status
-
-	if( _modem == LORA )
-	{ // Allowing access to FSK registers while in LoRa standby mode
-		writeRegister(REG_OP_MODE, LORA_STANDBY_FSK_REGS_MODE);
-	}
-
-	state = 1;
-	// Saving temperature value
-	_temp = readRegister(REG_TEMP);
-	if( _temp & 0x80 ) // The SNR sign bit is 1
-	{
-		// Invert and divide by 4
-		_temp = ( ( ~_temp + 1 ) & 0xFF );
-	}
-	else
-	{
-		// Divide by 4
-		_temp = ( _temp & 0xFF );
-	}
-
-
-#if (SX1278FSK_debug_mode > 1)
-	Serial.print(F("## Temperature is: "));
-	Serial.print(_temp);
-	Serial.println(F(" ##"));
-	Serial.println();
-#endif
-
-	if( _modem == LORA )
-	{
-		writeRegister(REG_OP_MODE, st0);	// Getting back to previous status
-	}
-
-	state = 0;
-	return state;
-}
-
-/*
-Function: It prints the registers related to RX
-Returns: Integer that determines if there has been any error
-state = 2  --> The command has not been executed
-state = 1  --> There has been an error while executing the command
-state = 0  --> The command has been executed with no errors
-*/
-void SX1278FSK::showRxRegisters()
-{	
-	Serial.println(F("\n--- Show RX register ---"));
-
-	// variable
-	byte reg;	
-
-	for(int i = 0x00; i < 0x80; i++)
-	{
-		reg = readRegister(i);	
-		Serial.print(F("Reg 0x"));
-		Serial.print(i, HEX);
-		Serial.print(F(":"));
-		Serial.print(reg, HEX);
-		Serial.println();
-		delay(100);
-	}
-
-	Serial.println(F("------------------------"));
-
-}
-#endif
 
 SemaphoreHandle_t globalLock =xSemaphoreCreateMutex();
 SX1278FSK sx1278 = SX1278FSK();
