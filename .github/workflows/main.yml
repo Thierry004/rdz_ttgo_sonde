@@ -1,0 +1,24 @@
+name: Build T-BEAM v1.2
+
+on:
+  push:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Build T-BEAM v1.2 (AXP2101)
+        run: platformio run -e tbeam-v1.2
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: firmware-tbeam-v1.2
+          path: .pio/build/tbeam-v1.2/*.bin
